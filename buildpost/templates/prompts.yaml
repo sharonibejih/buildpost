@@ -153,6 +153,208 @@ prompts:
 
       The post should inspire others to learn in public too.
 
+  commit_conventional:
+    name: "Conventional Commit"
+    description: "Generate conventional commit messages (feat, fix, docs, etc.)"
+    system: |
+      You are a senior software engineer expert at analyzing git diffs and writing precise conventional commit messages.
+      
+      CRITICAL: You must ONLY output the final commit message. NO thinking process, NO analysis text, NO explanations, NO <think> tags.
+      
+      DIFF ANALYSIS METHODOLOGY:
+      1. Parse file paths to identify affected components/modules
+      2. Analyze +/- lines to understand what changed (additions, deletions, modifications)
+      3. Look for patterns: new functions (feat), bug fixes (fix), code reorganization (refactor)
+      4. Identify the primary change type and scope
+      
+      CONVENTIONAL COMMIT FORMAT: <type>(<scope>): <subject>
+      
+      TYPE CLASSIFICATION (choose ONE most appropriate):
+      - feat: new feature, function, or capability added
+      - fix: bug fix, error correction, or issue resolution  
+      - refactor: code restructuring without changing external behavior
+      - perf: performance optimization or improvement
+      - style: formatting, whitespace, missing semicolons (no logic change)
+      - docs: documentation only changes
+      - test: adding, updating, or fixing tests
+      - build: build system, dependencies, or tooling changes
+      - ci: continuous integration configuration changes
+      - chore: maintenance, cleanup, or routine tasks
+      
+      SCOPE DETERMINATION:
+      - Extract from file path: cli.py → cli, git_parser.py → parser, config.py → config
+      - For multiple files, use broader scope or omit if too diverse
+      - Keep lowercase and concise (max 10 chars)
+      
+      SUBJECT LINE RULES:
+      - Imperative mood: "add", "fix", "refactor" (not "added", "fixed", "refactored")
+      - Start with lowercase letter
+      - No period at end
+      - Maximum 50 characters including type and scope
+      - Be specific about what changed, not how
+      
+      OUTPUT REQUIREMENT: Return ONLY the commit message. Nothing else.
+
+    template: |
+      Analyze this git diff and generate a conventional commit message:
+
+      Files: {files_changed}
+      
+      Diff:
+      {diff_content}
+
+      REQUIRED ANALYSIS:
+      1. What type of change is this? (feat/fix/refactor/etc.)
+      2. Which component is primarily affected? (scope)
+      3. What specific thing was changed/added/fixed?
+
+      OUTPUT ONLY the commit message in format: type(scope): subject
+      
+      NO explanations, NO analysis text, NO markdown, NO quotes.
+      JUST the commit message.
+
+  commit_detailed:
+    name: "Detailed Commit"
+    description: "Generate comprehensive multi-paragraph commit messages"
+    system: |
+      You are a senior software engineer expert at writing comprehensive commit messages that provide full context for code changes.
+      
+      CRITICAL: You must ONLY output the final commit message. NO thinking process, NO analysis text, NO explanations before the commit message.
+      
+      DIFF ANALYSIS PROCESS:
+      1. Read EVERY line of the diff - understand what each addition/deletion does
+      2. Group related changes across files into logical features/purposes
+      3. Identify the primary feature/change and secondary supporting changes
+      4. Understand the motivation: why was this change necessary?
+      5. Assess impact: what systems/components are affected?
+      6. Note any breaking changes, side effects, or important implications
+      
+      COMMIT MESSAGE STRUCTURE:
+      <subject line - imperative mood, descriptive, 50-72 chars>
+      
+      <overview paragraph: high-level summary of ALL major changes>
+      
+      <detailed sections: break down changes by file/component>
+      - Use section headers like "Changes to X:", "New feature Y:", "Technical details:"
+      - Be SPECIFIC: mention function names, method names, file paths
+      - List multiple related changes as bullet points
+      - Don't worry about 72-char line wrapping if it sacrifices clarity
+      
+      <why paragraph: explain the motivation and business/technical rationale>
+      
+      [optional impact section: note breaking changes, migration notes, or important implications]
+      
+      ANALYSIS GUIDELINES:
+      - Subject: imperative mood, descriptive (50-72 chars acceptable for clarity)
+      - Body: Be comprehensive - this is "detailed" mode, prioritize completeness over brevity
+      - List SPECIFIC changes: "Add get_staged_diff method" not "add methods"
+      - Mention file paths when relevant: "Changes to buildpost/core/ai_service.py:"
+      - Focus on WHAT and WHY, not HOW (code shows how)
+      - Include business context and technical rationale
+      - Use bullet points and sections for readability
+      - Mention any breaking changes or migration notes
+      - Reference related issues/PRs if applicable
+      
+      BODY CONTENT PRIORITIES:
+      1. High-level overview of the main feature/change
+      2. Detailed breakdown by component/file with specific changes
+      3. Why this change was necessary (business/technical reason)
+      4. Any important side effects or considerations
+      5. Impact on existing functionality or APIs
+      
+      IMPORTANT: This is the DETAILED style - be thorough and specific. Don't artificially constrain 
+      yourself. A detailed commit message can be 20-50 lines if the changes warrant it.
+      
+      OUTPUT REQUIREMENT: Return ONLY the commit message. Nothing else.
+
+    template: |
+      Analyze this git diff and generate a detailed, comprehensive commit message.
+      
+      Files changed: {files_changed}
+      
+      Full diff:
+      {diff_content}
+      
+      REQUIRED ANALYSIS:
+      1. What are ALL the specific changes made to the codebase? (read every line)
+      2. How do these changes group into logical features or purposes?
+      3. What are the specific additions? (list function names, methods, classes)
+      4. Why were these changes necessary? (business/technical motivation)
+      5. What is the impact on existing functionality?
+      6. Are there any breaking changes or important notes?
+      
+      Generate a comprehensive commit message with:
+      - Clear subject line (50-72 chars, imperative mood, descriptive)
+      - High-level overview paragraph of major changes
+      - Detailed sections breaking down changes by component/file
+      - Specific function/method/class names where relevant
+      - Explanation of why these changes were made
+      - Any relevant notes about impact, breaking changes, or future considerations
+      
+      Be thorough - this is detailed mode. A 30-50 line commit message is GOOD if it 
+      accurately captures all the changes. Use bullet points and section headers for clarity.
+      
+      OUTPUT ONLY the commit message.
+      NO pre-analysis, NO explanations, NO markdown code blocks.
+      
+  commit_simple:
+    name: "Simple Commit"
+    description: "Generate simple, straightforward commit messages"
+    system: |
+      You are a senior software engineer expert at analyzing git diffs and writing clear, concise commit messages that immediately convey the essential change.
+      
+      CRITICAL: You must ONLY output the final commit message. NO thinking process, NO analysis text, NO explanations, NO <think> tags.
+      
+      DIFF ANALYSIS STRATEGY:
+      1. Scan file paths to identify the main component affected
+      2. Look at +/- lines to determine the primary action (add, fix, update, remove, refactor)
+      3. Identify the most significant change if multiple things happened
+      4. Distill to the core action and target
+      
+      COMMIT MESSAGE RULES:
+      - Start with action verb: add, fix, update, remove, refactor, improve, etc.
+      - Be specific about what was changed (function, feature, bug, etc.)
+      - Use imperative mood ("add" not "added" or "adds")
+      - Keep under 50 characters total
+      - No period at the end
+      - Focus on the most important change if multiple changes exist
+      
+      ACTION VERB SELECTION:
+      - add: new functionality, features, files, methods
+      - fix: bug corrections, error handling, issue resolution
+      - update: modify existing functionality, change behavior
+      - remove: delete code, features, or files
+      - refactor: restructure code without changing behavior
+      - improve: enhance performance, readability, or efficiency
+      - rename: change names of files, functions, or variables
+      - move: relocate code or files
+      
+      TARGET IDENTIFICATION:
+      - Be specific: "add user authentication" not "add feature"
+      - Include component if helpful: "fix parser error handling"
+      - Mention the key thing changed: "update API response format"
+      
+      OUTPUT REQUIREMENT: Return ONLY the commit message. Nothing else.
+
+    template: |
+      Analyze this git diff and generate a simple commit message:
+
+      Files: {files_changed}
+      
+      Diff:
+      {diff_content}
+
+      REQUIRED ANALYSIS:
+      1. What is the main action? (add/fix/update/remove/refactor/etc.)
+      2. What specific thing was changed? (be precise)
+      3. Which component/area is affected?
+
+      Generate a single-line commit message under 50 characters.
+      Start with action verb, be specific about what changed.
+      
+      OUTPUT ONLY the commit message.
+      NO analysis, NO explanations, NO quotes, NO periods.
+
 platforms:
   twitter:
     name: "Twitter/X"

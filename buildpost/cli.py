@@ -3,6 +3,7 @@
 import sys
 import click
 import pyperclip
+
 from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
@@ -13,6 +14,7 @@ from buildpost.core.ai_service import AIService
 from buildpost.core.prompt_engine import PromptEngine
 from buildpost.utils.config import Config
 from buildpost.utils.formatters import format_post
+from buildpost.utils.token_resolver import TokenCounter
 
 console = Console()
 
@@ -350,6 +352,359 @@ def version():
     """Show BuildPost version."""
     console.print("[bold]BuildPost[/bold] v0.1.1")
     console.print("Turn your git commits into social media posts using AI")
+
+
+def _clean_ai_output(raw_output: str) -> str:
+    """Smart extraction of commit message from AI output with thinking process."""
+    import re
+    
+    if not raw_output:
+        return ""
+    
+    # Strategy 0: Look for commit message after specific phrases
+    commit_indicators = [
+        r'(?:the commit message (?:would be|should be|is)|so the commit message would be|commit message:|message:)\s*:?\s*\n?\s*([^\n]+)',
+        r'(?:would be|should be|is):\s*\n?\s*([a-z]+(?:\([^)]+\))?:\s*[^\n]+)',
+        r'^([a-z]+(?:\([^)]+\))?:\s*[^\n]+)$',
+    ]
+
+    for pattern in commit_indicators:
+        matches = re.findall(pattern, raw_output, re.MULTILINE | re.IGNORECASE)
+        if matches:
+            commit_msg = matches[0].strip()
+            if len(commit_msg) > 10 and ':' in commit_msg:
+                return commit_msg
+    
+    # Strategy 1: Remove thinking tags first
+    cleaned = raw_output
+
+    thinking_patterns = [
+        r'<think>.*?</think>',
+        r'<thinking>.*?</thinking>',
+        r'<analysis>.*?</analysis>',
+        r'<thought>.*?</thought>',
+    ]
+    
+    for pattern in thinking_patterns:
+        cleaned = re.sub(pattern, '', cleaned, flags=re.DOTALL | re.IGNORECASE)
+    
+    # Strategy 2: Extract multi-line commit message (for detailed commits)
+    lines = cleaned.split('\n')
+    commit_start_idx = -1
+    
+    # Find where the actual commit message starts
+    for i, line in enumerate(lines):
+        line = line.strip()
+        if not line:
+            continue
+            
+        # Skip obvious analysis/thinking lines
+        skip_patterns = [
+            r'^(okay|let me|looking at|based on|i can see|this appears|it seems|the changes|analyzing|from the diff|the diff shows|that fits|the conventional|putting it all together)',
+            r'^(maybe|probably|also|since|but|however|therefore|thus|hence|so)',
+            r'characters?\.|spec\.|good\.|needed\.|similar\.',
+            r'(should be|would be|could be|might be)',
+        ]
+        
+        is_analysis = False
+        for pattern in skip_patterns:
+            if re.search(pattern, line, re.IGNORECASE):
+                is_analysis = True
+                break
+        
+        if not is_analysis:
+            # Check if this looks like a commit message start
+            if (re.match(r'^[A-Z][a-z]', line) and len(line) < 72) or \
+               re.match(r'^(feat|fix|docs|style|refactor|test|chore|perf|ci|build|revert)(\([^)]+\))?:', line, re.IGNORECASE):
+                commit_start_idx = i
+                break
+    
+    # Strategy 3: Extract the commit message from start index
+    if commit_start_idx >= 0:
+        commit_lines = []
+        for i in range(commit_start_idx, len(lines)):
+            line = lines[i].strip()
+            
+            # Stop at obvious analysis continuation
+            if re.search(r'^(the feature|this|it|also note|avoid the|focus on|make sure)', line, re.IGNORECASE):
+                break
+                
+            # Include the line if it's substantial
+            if line:
+                commit_lines.append(line)
+            elif commit_lines:  # Empty line after we've started collecting
+                commit_lines.append('')
+        
+        if commit_lines:
+            # Clean up trailing empty lines
+            while commit_lines and not commit_lines[-1]:
+                commit_lines.pop()
+            
+            if commit_lines:
+                return '\n'.join(commit_lines)
+    
+    # Strategy 4: Look for conventional commit patterns (fallback for simple commits)
+    conventional_pattern = r'^(feat|fix|docs|style|refactor|test|chore|perf|ci|build|revert)(\([^)]+\))?\s*:\s*.+$'
+    
+    for line in lines:
+        line = line.strip()
+        if re.match(conventional_pattern, line, re.IGNORECASE):
+            return line
+    
+    # Strategy 5: Find the most commit-like single line
+    potential_commits = []
+    for line in lines:
+        line = line.strip()
+        if not line or len(line) < 10:
+            continue
+            
+        # Skip obvious analysis text
+        skip_patterns = [
+            r'^(okay|let me|looking at|based on|i can see|this appears|it seems|the changes|analyzing|from the diff|the diff shows|that fits|the conventional)',
+            r'^(here\'s|here is|the commit message|commit message|message)',
+            r'characters?\.|spec\.|good\.|needed\.',
+        ]
+        
+        skip_line = False
+        for pattern in skip_patterns:
+            if re.search(pattern, line, re.IGNORECASE):
+                skip_line = True
+                break
+        
+        if not skip_line:
+            # Score the line based on commit-like characteristics
+            score = 0
+            if re.match(r'^[A-Z][a-z]', line):  # Starts with capital letter
+                score += 5
+            if re.match(r'^[a-z]+(\([^)]+\))?:', line):  # Conventional format
+                score += 10
+            if len(line) < 72:  # Good commit length
+                score += 3
+            if not line.endswith('.'):  # No period at end
+                score += 2
+            if any(word in line.lower() for word in ['add', 'fix', 'update', 'remove', 'refactor', 'implement', 'create']):
+                score += 3
+                
+            potential_commits.append((score, line))
+    
+    if potential_commits:
+        # Return the highest scoring commit-like line
+        potential_commits.sort(key=lambda x: x[0], reverse=True)
+        return potential_commits[0][1]
+    
+    # Fallback: return first substantial line
+    for line in lines:
+        line = line.strip()
+        if line and len(line) > 10 and not line.lower().startswith(('okay', 'let me', 'looking', 'based')):
+            return line
+    
+    return raw_output.strip()
+
+
+def _setup_ai_services(api_key, provider, config):
+    """
+    Setup AI services with proper error handling. Reuses logic from main CLI.
+    
+    Returns:
+        Tuple of (ai_service, prompt_engine, active_provider)
+    """
+    active_provider = provider or config.get_provider()
+
+    if active_provider not in AIService.supported_providers():
+        console.print(
+            f"[bold red]Error:[/bold red] Unsupported provider '{active_provider}'. "
+            f"Supported providers: {', '.join(AIService.supported_providers())}"
+        )
+        sys.exit(1)
+
+    # Get API key
+    if not api_key:
+        api_key = config.get_api_key(active_provider)
+
+    if not api_key:
+        provider_info = AIService.get_provider_info(active_provider)
+        env_var = provider_info.get("env_var", "API_KEY")
+        signup_url = provider_info.get("signup_url")
+        display_name = provider_info.get("display_name", active_provider)
+
+        console.print(
+            f"[bold red]Error:[/bold red] No API key found for {display_name}.\n"
+        )
+        if signup_url:
+            console.print(f"Get your API key at: {signup_url}\n")
+        console.print(
+            "Then set it using one of these methods:\n"
+            f"  1. buildpost config set-key --provider {active_provider} YOUR_API_KEY\n"
+            f"  2. export {env_var}=YOUR_API_KEY\n"
+            "  3. buildpost commit --api-key YOUR_API_KEY"
+        )
+        sys.exit(1)
+
+    # Initialize services
+    ai_service = AIService(
+        provider=active_provider,
+        api_key=api_key,
+        model=config.get_model(active_provider),
+    )
+    prompt_engine = PromptEngine(prompts_file=str(config.get_prompts_file()))
+    
+    return ai_service, prompt_engine, active_provider
+
+@cli.command()
+@click.option("--style", "-s", default="commit_conventional", 
+              help="Commit message style")
+@click.option("--stage-all", "-a", is_flag=True, 
+              help="Stage all changes before committing")
+@click.option("--no-commit", is_flag=True, 
+              help="Generate message only, don't commit")
+@click.option("--api-key", help="LLM API key (overrides config)")
+@click.option("--provider", type=click.Choice(AIService.supported_providers()),
+    help="LLM provider to use (openai, groq, claude)",
+)
+@click.option("--max-tokens", type=int, default=None,
+    help="Maximum tokens for diff content (auto-calculated if not set)"
+)
+@click.option("--output-tokens", type=int, default=1500,
+    help="Tokens reserved for AI response (default: 1500)"
+)
+def commit(style, stage_all, no_commit, api_key, provider, max_tokens, output_tokens):
+    """Generate AI-powered commit message from current changes and commit."""
+    try:
+        config = Config()
+        ai_service, prompt_engine, active_provider = _setup_ai_services(api_key, provider, config)
+        
+        git_parser = GitParser()
+        changes_summary = git_parser.get_changes_summary()
+        
+        if not changes_summary["has_staged"] and not changes_summary["has_unstaged"] and not changes_summary["has_untracked"]:
+            console.print("[yellow]No changes to commit.[/yellow]")
+            sys.exit(0)
+
+        if stage_all:
+            console.print("[yellow]Staging all changes...[/yellow]")
+            git_parser.stage_all_changes()
+            changes_summary = git_parser.get_changes_summary()
+
+        if changes_summary["has_staged"]:
+            console.print(f"\n[bold]Staged files ({len(changes_summary['staged_files'])}):[/bold]")
+            for file in changes_summary["staged_files"][:10]:
+                console.print(f"  [green]✓[/green] {file}")
+            if len(changes_summary["staged_files"]) > 10:
+                console.print(f"  ... and {len(changes_summary['staged_files']) - 10} more")
+        else:
+            console.print("\n[bold red]No staged changes to commit.[/bold red]")
+            console.print("Use [cyan]--stage-all[/cyan] to stage all changes, or stage files manually with [cyan]git add[/cyan]")
+            sys.exit(1)
+
+        diff_text = git_parser.get_all_changes_diff()
+        if not diff_text:
+            console.print("[bold red]Error:[/bold red] Could not get diff")
+            sys.exit(1)
+
+        token_counter = TokenCounter(provider=active_provider)
+        
+        try:
+            if max_tokens is None:
+                max_tokens = token_counter.calculate_max_diff_tokens(
+                    model=ai_service.model_name,
+                    prompt_style=style,
+                    output_reserve=output_tokens
+                )
+                
+                console.print(
+                    f"[dim]Token allocation - Diff: {max_tokens:,} | "
+                    f"Output: {output_tokens:,}[/dim]"
+                )
+        except ValueError as e:
+            console.print(f"[bold red]Error:[/bold red] {e}")
+            sys.exit(1)
+        
+        diff_text, original_tokens, final_tokens = token_counter.truncate_intelligently(
+            diff_text, 
+            max_tokens
+        )
+        
+        if original_tokens > max_tokens:
+            console.print(
+                f"[yellow]⚠ Diff truncated:[/yellow] {original_tokens:,} → {final_tokens:,} tokens"
+            )
+        else:
+            console.print(f"[dim]Diff size: {original_tokens:,} tokens[/dim]")
+
+        context = {
+            "files_changed": ", ".join(changes_summary["staged_files"]),
+            "diff_content": diff_text,
+        }
+
+        try:
+            rendered_prompt = prompt_engine.render_prompt(style, context)
+        except KeyError as e:
+            console.print(f"[bold red]Error:[/bold red] {e}")
+            sys.exit(1)
+
+        with console.status("[bold green]Generating commit message with AI...", spinner="dots"):
+            try:
+                raw_commit_message = ai_service.generate_post(
+                    system_prompt=rendered_prompt["system"],
+                    user_prompt=rendered_prompt["user"],
+                    max_tokens=output_tokens, 
+                    temperature=config.get_temperature(),
+                )
+            except Exception as e:
+                console.print(f"[bold red]Error generating commit message:[/bold red] {e}")
+                sys.exit(1)
+        
+        commit_message = _clean_ai_output(raw_commit_message)
+
+        console.print("\n" + "=" * 60)
+        console.print(
+            Panel(
+                commit_message,
+                title=f"[bold green]Generated Commit Message[/bold green] ({style})",
+                border_style="green",
+            )
+        )
+        console.print("=" * 60 + "\n")
+
+        if no_commit:
+            console.print("[yellow]Message generated. Use without --no-commit to actually commit.[/yellow]")
+            sys.exit(0)
+
+        console.print("[bold]Do you want to commit with this message?[/bold]")
+        console.print("  [green]y[/green] - Yes, commit now")
+        console.print("  [yellow]e[/yellow] - Edit message")
+        console.print("  [red]n[/red] - Cancel")
+        
+        choice = click.prompt("\nChoice", type=click.Choice(['y', 'e', 'n']), default='y')
+
+        if choice == 'n':
+            console.print("[yellow]Commit cancelled.[/yellow]")
+            sys.exit(0)
+        
+        if choice == 'e':
+            edited_message = click.edit(commit_message)
+            if edited_message:
+                commit_message = edited_message.strip()
+            else:
+                console.print("[yellow]Commit cancelled (no message provided).[/yellow]")
+                sys.exit(0)
+
+        try:
+            commit_hash = git_parser.commit_changes(commit_message)
+            console.print(f"\n[bold green]✓[/bold green] Committed successfully!")
+            console.print(f"[bold]Commit hash:[/bold] {commit_hash[:7]}")
+        except Exception as e:
+            console.print(f"[bold red]Error committing:[/bold red] {e}")
+            sys.exit(1)
+
+    except InvalidGitRepositoryError as e:
+        console.print(f"[bold red]Error:[/bold red] {e}")
+        sys.exit(1)
+    except Exception as e:
+        console.print(f"[bold red]Unexpected error:[/bold red] {e}")
+        if "--debug" in sys.argv:
+            raise
+        sys.exit(1)
 
 
 def main():

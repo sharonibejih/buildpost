@@ -184,19 +184,15 @@ class GitParser:
         """
         file_count = len(files)
 
-        # Categorize files by extension
         file_types = {}
         for file_path in files:
             ext = os.path.splitext(file_path)[1] or 'no extension'
             file_types[ext] = file_types.get(ext, 0) + 1
 
-        # Build summary
         parts = []
 
-        # File count
         parts.append(f"{file_count} file{'s' if file_count != 1 else ''} changed")
 
-        # File types (top 3)
         if file_types:
             top_types = sorted(
                 file_types.items(),
@@ -206,7 +202,6 @@ class GitParser:
             type_str = ', '.join([f"{ext} ({count})" for ext, count in top_types])
             parts.append(f"types: {type_str}")
 
-        # Lines changed
         if insertions or deletions:
             changes = []
             if insertions:
@@ -224,3 +219,82 @@ class GitParser:
     def get_current_branch(self) -> str:
         """Get current branch name."""
         return self.repo.active_branch.name
+
+    def get_staged_diff(self) -> Optional[str]:
+        """
+        Get the diff of staged changes.
+
+        Returns:
+            Diff text of staged changes, or None if nothing is staged.
+        """
+        try:
+            diff_text = self.repo.git.diff("--cached")
+            return diff_text if diff_text else None
+        except Exception:
+            return None
+
+    def get_all_changes_diff(self) -> Optional[str]:
+        """
+        Get diff of all changes (staged + unstaged).
+
+        Returns:
+            Combined diff text, or None if no changes.
+        """
+        try:
+            staged = self.repo.git.diff("--cached")
+            unstaged = self.repo.git.diff()
+            
+            combined = []
+            if staged:
+                combined.append(staged)
+            if unstaged:
+                combined.append(unstaged)
+            
+            return "\n\n".join(combined) if combined else None
+        except Exception:
+            return None
+
+    def get_changes_summary(self) -> Dict[str, any]:
+        """
+        Get a summary of current changes (staged and unstaged).
+
+        Returns:
+            Dictionary with change information.
+        """
+        staged_files = [item.a_path for item in self.repo.index.diff("HEAD")]
+        unstaged_files = [item.a_path for item in self.repo.index.diff(None)]
+        untracked_files = self.repo.untracked_files
+
+        return {
+            "staged_files": staged_files,
+            "unstaged_files": unstaged_files,
+            "untracked_files": untracked_files,
+            "total_files": len(staged_files) + len(unstaged_files) + len(untracked_files),
+            "has_staged": len(staged_files) > 0,
+            "has_unstaged": len(unstaged_files) > 0,
+            "has_untracked": len(untracked_files) > 0,
+        }
+
+    def stage_all_changes(self):
+        """Stage all changes including untracked files."""
+        self.repo.git.add("-A")
+
+    def commit_changes(self, message: str) -> str:
+        """
+        Commit staged changes with the given message.
+
+        Args:
+            message: Commit message
+
+        Returns:
+            Commit hash of the new commit
+
+        Raises:
+            ValueError: If there are no staged changes
+        """
+        summary = self.get_changes_summary()
+        if not summary["has_staged"]:
+            raise ValueError("No staged changes to commit")
+
+        commit = self.repo.index.commit(message)
+        return commit.hexsha
