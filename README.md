@@ -1,6 +1,6 @@
 # BuildPost
 
-![PyPI - Downloads](https://img.shields.io/pypi/dm/buildpost)
+![PyPI - Downloads](https://img.shields.io/pypi/dt/buildpost)
 
 > Turn your git commits into engaging social media posts using AI
 
