@@ -1,5 +1,7 @@
 # BuildPost
 
+![PyPI - Downloads](https://img.shields.io/pypi/dm/buildpost)
+
 > Turn your git commits into engaging social media posts using AI
 
 Free CLI tool that transforms your git commits into social media content. Perfect for developers who want to build in public but struggle with content creation.
@@ -87,6 +89,26 @@ buildpost --platform linkedin
 ### Combine Options
 ```bash
 buildpost --commit abc123 --style technical --platform devto --no-hashtags
+```
+
+## Weekly Changelog
+
+Generate a weekly changelog from recent commits:
+```bash
+# Default: last 7 days from HEAD
+buildpost changelog
+
+# Look back 14 days
+buildpost changelog --days 14
+
+# Specific date range
+buildpost changelog --since 2026-01-01 --until 2026-01-07
+
+# Git revision range
+buildpost changelog --range main..HEAD
+
+# Write to a file
+buildpost changelog --output WEEKLY_CHANGELOG.md
 ```
 
 ## AI-Powered Commit Messages

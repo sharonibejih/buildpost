@@ -103,6 +103,32 @@ class GitParser:
         commits = list(self.repo.iter_commits(rev_range))
         return [self._parse_commit(commit) for commit in commits]
 
+    def get_commits_by_date(
+        self,
+        since: Optional[str] = None,
+        until: Optional[str] = None,
+        rev: str = "HEAD",
+    ) -> List[CommitInfo]:
+        """
+        Get commits within a date range.
+
+        Args:
+            since: Start date/time (e.g., "2025-01-01", "7 days ago")
+            until: End date/time (e.g., "2025-01-08", "now")
+            rev: Git revision to start from (default: HEAD)
+
+        Returns:
+            List of CommitInfo objects.
+        """
+        kwargs = {}
+        if since:
+            kwargs["since"] = since
+        if until:
+            kwargs["until"] = until
+
+        commits = list(self.repo.iter_commits(rev, **kwargs))
+        return [self._parse_commit(commit) for commit in commits]
+
     def _parse_commit(self, commit: Commit) -> CommitInfo:
         """
         Parse a git Commit object into CommitInfo.

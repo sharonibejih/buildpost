@@ -153,6 +153,34 @@ prompts:
 
       The post should inspire others to learn in public too.
 
+  weekly_changelog:
+    name: "Weekly Changelog"
+    description: "Summarize a week of commits into a clear changelog."
+    system: |
+      You are a senior software engineer writing weekly changelogs for a software project.
+      Your tone is clear, concise, and useful for both engineers and stakeholders.
+      Prefer concrete outcomes and grouped themes over raw commit lists.
+
+    template: |
+      Create a weekly changelog from the following commit data.
+
+      Date Range: {date_range}
+      Range Spec: {range_spec}
+      Total Commits: {commit_count}
+      Unique Files Changed: {unique_files_count}
+      Total Line Changes: +{total_insertions}/-{total_deletions}
+
+      Commits:
+      {commits_list}
+
+      Write a changelog that includes:
+      - A 2-4 sentence summary of the week's work
+      - 3-6 bullet highlights grouped by theme (features, fixes, infra, docs, etc.)
+      - Optional "Notable Commits" section if specific commits are worth calling out
+      - Clear, non-marketing language
+      - Markdown formatting
+      - Keep it under 350 words
+
   commit_conventional:
     name: "Conventional Commit"
     description: "Generate conventional commit messages (feat, fix, docs, etc.)"
