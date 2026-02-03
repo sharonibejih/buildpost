@@ -1,6 +1,7 @@
 """Command-line interface for BuildPost."""
 
 import sys
+from datetime import datetime, timezone, timedelta
 import click
 import pyperclip
 
@@ -352,6 +353,172 @@ def version():
     """Show BuildPost version."""
     console.print("[bold]BuildPost[/bold] v0.1.1")
     console.print("Turn your git commits into social media posts using AI")
+
+
+def _build_changelog_context(commits, range_spec: str) -> dict:
+    """Build template context for changelog generation."""
+    commit_lines = []
+    unique_files = set()
+    total_insertions = 0
+    total_deletions = 0
+
+    for commit in commits:
+        date = commit.date.split(" ")[0]
+        file_count = len(commit.files_changed)
+        unique_files.update(commit.files_changed)
+        total_insertions += commit.insertions
+        total_deletions += commit.deletions
+
+        delta_parts = []
+        if commit.insertions:
+            delta_parts.append(f"+{commit.insertions}")
+        if commit.deletions:
+            delta_parts.append(f"-{commit.deletions}")
+        delta = " ".join(delta_parts) if delta_parts else "0"
+
+        commit_lines.append(
+            f"- {date} {commit.short_hash} {commit.message} "
+            f"({file_count} files, {delta})"
+        )
+
+    if commits:
+        newest = commits[0].date.split(" ")[0]
+        oldest = commits[-1].date.split(" ")[0]
+        date_range = f"{oldest} to {newest}"
+    else:
+        date_range = "No commits found"
+
+    return {
+        "date_range": date_range,
+        "range_spec": range_spec,
+        "commit_count": len(commits),
+        "unique_files_count": len(unique_files),
+        "total_insertions": total_insertions,
+        "total_deletions": total_deletions,
+        "commits_list": "\n".join(commit_lines) if commit_lines else "No commits.",
+    }
+
+
+@cli.command()
+@click.option("--since", help="Start date/time (e.g., 2026-01-01 or '7 days ago')")
+@click.option("--until", help="End date/time (e.g., 2026-01-07 or 'now')")
+@click.option(
+    "--days",
+    type=int,
+    default=7,
+    show_default=True,
+    help="Number of days to look back when --since isn't set",
+)
+@click.option("--range", "-r", "rev_range", help="Git revision range (e.g., main..HEAD)")
+@click.option("--style", "-s", default="weekly_changelog", help="Prompt style to use")
+@click.option("--output", "-o", type=click.Path(dir_okay=False), help="Write to a file")
+@click.option("--no-copy", is_flag=True, help="Do not copy to clipboard")
+@click.option("--api-key", help="LLM API key (overrides config)")
+@click.option(
+    "--provider",
+    type=click.Choice(AIService.supported_providers()),
+    help="LLM provider to use (openai, groq, claude)",
+)
+@click.option("--max-tokens", type=int, default=None, help="Maximum tokens for the output")
+def changelog(since, until, days, rev_range, style, output, no_copy, api_key, provider, max_tokens):
+    """Generate a weekly changelog from recent commits."""
+    try:
+        config = Config()
+        ai_service, prompt_engine, _ = _setup_ai_services(api_key, provider, config)
+        git_parser = GitParser()
+
+        if rev_range:
+            commits = git_parser.get_commit_range(rev_range)
+            range_spec = f"range {rev_range}"
+        else:
+            if not since:
+                since_date = datetime.now(timezone.utc) - timedelta(days=days)
+                since = since_date.strftime("%Y-%m-%d %H:%M:%S")
+            commits = git_parser.get_commits_by_date(since=since, until=until)
+            range_spec = f"since {since}" if not until else f"{since} to {until}"
+
+        if not commits:
+            console.print("[bold yellow]No commits found for that range.[/bold yellow]")
+            sys.exit(0)
+
+        context = _build_changelog_context(commits, range_spec)
+
+        try:
+            rendered_prompt = prompt_engine.render_prompt(style, context)
+        except KeyError:
+            console.print(
+                f"[yellow]Prompt '{style}' not found. Using built-in changelog template.[/yellow]"
+            )
+            fallback_system = (
+                "You are a senior software engineer who writes concise, "
+                "useful weekly changelogs for stakeholders and developers."
+            )
+            fallback_template = (
+                "Create a weekly changelog from the commits below.\n\n"
+                "Date Range: {date_range}\n"
+                "Range Spec: {range_spec}\n"
+                "Total Commits: {commit_count}\n"
+                "Unique Files: {unique_files_count}\n"
+                "Total Changes: +{total_insertions}/-{total_deletions}\n\n"
+                "Commits:\n{commits_list}\n\n"
+                "Write a changelog with:\n"
+                "- A short summary paragraph\n"
+                "- 3-6 bullet highlights grouped by theme\n"
+                "- A concise list of notable commits (if needed)\n"
+                "- Keep it under 350 words\n"
+                "- Use Markdown formatting\n"
+            )
+            rendered_prompt = {
+                "system": fallback_system,
+                "user": fallback_template.format(**context),
+                "name": "weekly_changelog_fallback",
+            }
+
+        with console.status("[bold green]Generating changelog with AI...", spinner="dots"):
+            try:
+                generated = ai_service.generate_post(
+                    system_prompt=rendered_prompt["system"],
+                    user_prompt=rendered_prompt["user"],
+                    max_tokens=max_tokens or config.get_max_tokens(),
+                    temperature=config.get_temperature(),
+                )
+            except Exception as e:
+                console.print(f"[bold red]Error generating changelog:[/bold red] {e}")
+                sys.exit(1)
+
+        console.print("\n" + "=" * 60)
+        console.print(
+            Panel(
+                Markdown(generated),
+                title=f"[bold green]Weekly Changelog[/bold green] ({style})",
+                border_style="green",
+            )
+        )
+        console.print("=" * 60 + "\n")
+
+        if output:
+            try:
+                with open(output, "w", encoding="utf-8") as f:
+                    f.write(generated)
+                console.print(f"[bold green]✓[/bold green] Wrote changelog to {output}")
+            except Exception as e:
+                console.print(f"[bold red]Error writing file:[/bold red] {e}")
+
+        if not no_copy and config.should_copy_to_clipboard():
+            try:
+                pyperclip.copy(generated)
+                console.print("[bold green]✓[/bold green] Copied to clipboard!")
+            except Exception:
+                console.print("[yellow]Could not copy to clipboard[/yellow]")
+
+    except InvalidGitRepositoryError as e:
+        console.print(f"[bold red]Error:[/bold red] {e}")
+        sys.exit(1)
+    except Exception as e:
+        console.print(f"[bold red]Unexpected error:[/bold red] {e}")
+        if "--debug" in sys.argv:
+            raise
+        sys.exit(1)
 
 
 def _clean_ai_output(raw_output: str) -> str:
